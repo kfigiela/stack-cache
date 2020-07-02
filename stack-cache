@@ -10,7 +10,7 @@
 
 
 import Universum
-import Shelly
+import Shelly hiding (whenM)
 import Options.Applicative hiding (command)
 import qualified Options.Applicative as O
 
@@ -19,82 +19,91 @@ import qualified Data.Text as T
 default (Text)
 
 main :: IO ()
-main = do
-  StackYAML packages <- Y.decodeFileThrow "stack.yaml"
-  execParser (info (opts packages) idm) >>= shelly
+main =
+  execParser (info (opts <**> helper) ( fullDesc
+     <> header "stack-cache – manage stack-work cache during SCM branch switches" ))
+   >>= shelly
 
-opts :: [FilePath] -> Parser (Sh ())
-opts packages = subparser
-  ( O.command "restore"     (info (pure $ restore packages) idm)
- <> O.command "store"       (info (pure $ store packages) idm)
- <> O.command "restoreFrom" (info ((restoreFrom packages .  Branch) <$> argument str idm) idm)
- <> O.command "preinit"     (info (pure $ preinit packages) idm)
- <> O.command "cleanup"     (info ((cleanupBranch packages . Branch) <$> argument str idm) idm)
- <> O.command "build"       (info (stackBuild <$> some (argument str (metavar "ARGUMENTS..."))) idm)
- <> O.command "switch"      (info ((gitSwitch packages . Branch) <$> argument str idm) idm)
+opts :: Parser (Sh ())
+opts = subparser
+  ( O.command "build"               (info (stackBuild <$> some (argument str (metavar "ARGUMENTS..."))) (progDesc "Alias for stack build, use with --"))
+ <> O.command "switch"              (info ((gitSwitch . Branch) <$> argument str idm) (progDesc "Alias for git switch"))
+ )
+ <|> subparser
+ (  O.command "init"                (info (pure initCache) (progDesc "Create initial directory structure"))
+ <> O.command "restore"             (info (pure restore) (progDesc "Restore stack-work from current branch cache"))
+ <> O.command "store"               (info (pure store) (progDesc "Store stack-work to per-branch cache"))
+ <> O.command "restoreFrom"         (info ((restoreFrom .  Branch) <$> argument str (metavar "BRANCH")) (progDesc "Restore stack-work from specified branch cache"))
+ <> O.command "cleanup"             (info ((cleanupBranch . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Delete sepecified branch cache"))
+ <> O.command "cleanup-current"     (info (pure cleanupCurrent) (progDesc "Remove current stack-work"))
+ <> commandGroup "Maintenance & setup"
+ <> hidden
  )
 
-store :: [FilePath] -> Sh ()
-store packages = do
-  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
-  forM_ packages $ \package -> sub $ do
-    putTextLn $ toText package
+
+store :: Sh ()
+store = do
+  currentBranch <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+  forAllPackages $ \package -> sub $ do
     cd package
     mkdir_p "./.stack-work/git/branch"
     cmd "tmutil" "addexclusion" ".stack-work"
-    cmd "rm" "-rf" (workdir currentBranch)
-    cmd "cp" "-cpr" currentWorkdir (workdir currentBranch)
+    cmd "rm" "-rf" (cacheDir currentBranch)
+    whenM (test_d $ toString currentWorkdir) $ cmd "cp" "-cpr" currentWorkdir (cacheDir currentBranch)
 
-restore :: [FilePath] -> Sh ()
-restore packages = do
-  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
-  restoreFrom packages currentBranch
+restore :: Sh ()
+restore = do
+  currentBranch <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+  restoreFrom currentBranch
 
-restoreFrom :: [FilePath] -> Branch -> Sh ()
-restoreFrom packages fromBranch = do
-  forM_ packages $ \package -> sub $ do
-    putTextLn $ toText package
+restoreFrom :: Branch -> Sh ()
+restoreFrom fromBranch = do
+  forAllPackages $ \package -> sub $ do
     cd package
     mkdir_p "./.stack-work/git/branch"
     cmd "tmutil" "addexclusion" ".stack-work"
     cmd "rm" "-rf" currentWorkdir
-    cmd "cp" "-cpr" (workdir fromBranch) currentWorkdir
+    whenM (test_d $ toString (cacheDir fromBranch)) $ cmd "cp" "-cpr" (cacheDir fromBranch) currentWorkdir
 
-preinit :: [FilePath] -> Sh ()
-preinit packages = do
-  forM_ packages $ \package -> sub $ do
-    putTextLn $ toText package
+initCache :: Sh ()
+initCache = do
+  forAllPackages $ \package -> sub $ do
     cd package
     mkdir_p "./.stack-work/git/branch"
     cmd "tmutil" "addexclusion" ".stack-work"
 
-cleanupBranch :: [FilePath] -> Branch -> Sh ()
-cleanupBranch packages branch = do
-  forM_ packages $ \package -> sub $ do
-    putTextLn $ toText package
+cleanupBranch :: Branch -> Sh ()
+cleanupBranch branch = do
+  forAllPackages $ \package -> sub $ do
     cd package
-    cmd "rm" "-rf" (workdir branch)
+    cmd "rm" "-rf" (cacheDir branch)
+
+cleanupCurrent :: Sh ()
+cleanupCurrent = do
+  forAllPackages $ \package -> sub $ do
+    cd package
+    cmd "rm" "-rf" currentWorkdir
 
 stackBuild :: [Text] -> Sh ()
 stackBuild args = verbosely $ do
-  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
-  run_ "/usr/bin/env" $ ["stack", "build", "--work-dir", currentWorkdir] <> args
+  currentBranch <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+  run_ "/usr/bin/env" $ ["stack", "build", "--color", "always", "--work-dir", currentWorkdir] <> args
 
 
-gitSwitch :: [FilePath] -> Branch -> Sh ()
-gitSwitch packages newBranch = do
+gitSwitch :: Branch -> Sh ()
+gitSwitch newBranch = do
   putTextLn "Storing current branch cache"
-  store packages
+  store
   putTextLn $ "Switching branch to " <> unBranch newBranch
   cmd "git" "switch" $ unBranch newBranch
-  isCached <- test_d $ toString $ workdir newBranch
+  isCached <- test_d $ toString $ cacheDir newBranch
   if isCached
     then do
-      putTextLn $ "Stack cache found..."
-      restore packages
+      putTextLn $ "Stack cache found, restoring..."
+      restore
     else do
       putTextLn $ "Stack cache not found, restoring from master..."
-      restoreFrom packages (Branch "master")
+      restoreFrom (Branch "master")
 
 
 
@@ -105,8 +114,19 @@ newtype Branch = Branch { unBranch :: Text }
 sanitizeBranch :: Branch -> Text
 sanitizeBranch (Branch branch) = T.strip $ T.replace "/" "_" branch
 
-workdir :: Branch -> Text
-workdir branch = "./.stack-work/git/branch/" <> sanitizeBranch branch
+cacheDir :: Branch -> Text
+cacheDir branch = "./.stack-work/git/branch/" <> sanitizeBranch branch
 
 currentWorkdir :: Text
-currentWorkdir = "./.stack-work/git/master"
+currentWorkdir = "./.stack-work/git/current"
+
+git = cmd "/usr/bin/git"
+
+allPackages :: MonadIO m => m [FilePath]
+allPackages = packages <$> liftIO (Y.decodeFileThrow "stack.yaml")
+
+forAllPackages :: MonadIO m => (FilePath -> m ()) -> m ()
+forAllPackages action = do
+  packages <- allPackages
+  forM_ packages $ \package -> action package >> putText "."
+  putText "\n"
