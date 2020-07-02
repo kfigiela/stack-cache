@@ -12,6 +12,7 @@
 import Universum
 import Shelly hiding (whenM)
 import Options.Applicative hiding (command)
+import Options.Applicative.Help ((.$.))
 import qualified Options.Applicative as O
 
 import qualified Data.Yaml as Y
@@ -21,7 +22,9 @@ default (Text)
 main :: IO ()
 main =
   execParser (info (opts <**> helper) ( fullDesc
-     <> header "stack-cache – manage stack-work cache during SCM branch switches" ))
+     <> header "stack-cache – manage stack-work cache during SCM branch switches"
+     <> footerDoc (Just $ "Make sure to ignore stack-cache directories:" .$. "$ git config --global core.excludesfile ~/.gitignore" .$. "$ echo .stack-work-cache >> ~/.gitignore")
+     ))
    >>= shelly
 
 opts :: Parser (Sh ())
@@ -44,10 +47,9 @@ opts = subparser
 store :: Sh ()
 store = do
   currentBranch <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+  initCache
   forAllPackages $ \package -> sub $ do
     cd package
-    mkdir_p "./.stack-work/git/branch"
-    cmd "tmutil" "addexclusion" ".stack-work"
     cmd "rm" "-rf" (cacheDir currentBranch)
     whenM (test_d $ toString currentWorkdir) $ cmd "cp" "-cpr" currentWorkdir (cacheDir currentBranch)
 
@@ -60,17 +62,18 @@ restoreFrom :: Branch -> Sh ()
 restoreFrom fromBranch = do
   forAllPackages $ \package -> sub $ do
     cd package
-    mkdir_p "./.stack-work/git/branch"
-    cmd "tmutil" "addexclusion" ".stack-work"
     cmd "rm" "-rf" currentWorkdir
     whenM (test_d $ toString (cacheDir fromBranch)) $ cmd "cp" "-cpr" (cacheDir fromBranch) currentWorkdir
+    cmd "tmutil" "addexclusion" ".stack-work"
 
 initCache :: Sh ()
 initCache = do
   forAllPackages $ \package -> sub $ do
     cd package
-    mkdir_p "./.stack-work/git/branch"
+    mkdir_p "./.stack-work-cache/branch"
+    mkdir_p "./.stack-work"
     cmd "tmutil" "addexclusion" ".stack-work"
+    cmd "tmutil" "addexclusion" ".stack-work-cache"
 
 cleanupBranch :: Branch -> Sh ()
 cleanupBranch branch = do
@@ -87,7 +90,7 @@ cleanupCurrent = do
 stackBuild :: [Text] -> Sh ()
 stackBuild args = verbosely $ do
   currentBranch <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
-  run_ "/usr/bin/env" $ ["stack", "build", "--color", "always", "--work-dir", currentWorkdir] <> args
+  run_ "/usr/bin/env" $ ["stack", "build", "--color", "always"] <> args
 
 
 gitSwitch :: Branch -> Sh ()
@@ -115,10 +118,10 @@ sanitizeBranch :: Branch -> Text
 sanitizeBranch (Branch branch) = T.strip $ T.replace "/" "_" branch
 
 cacheDir :: Branch -> Text
-cacheDir branch = "./.stack-work/git/branch/" <> sanitizeBranch branch
+cacheDir branch = "./.stack-work-cache/branch/" <> sanitizeBranch branch
 
 currentWorkdir :: Text
-currentWorkdir = "./.stack-work/git/current"
+currentWorkdir = "./.stack-work"
 
 git = cmd "/usr/bin/git"
 
