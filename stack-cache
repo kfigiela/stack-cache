@@ -31,6 +31,7 @@ opts :: Parser (Sh ())
 opts = subparser
  (  O.command "init"                (info (pure initCache) (progDesc "Create initial directory structure"))
  <> O.command "relink"              (info (pure relink) (progDesc "Relink stack-work from current branch cache"))
+ <> O.command "clone"               (info ((clone . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Clone stack-work from other branch cache"))
  <> O.command "clean-branch"        (info ((cleanupBranch . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Delete sepecified branch cache"))
  <> O.command "clean"               (info (pure $ getCurrentBranch >>= cleanupBranch) (progDesc "Remove current stack-work, use relink to copy from master"))
  )
@@ -41,7 +42,7 @@ relink = do
   currentBranch <- getCurrentBranch
   forAllPackages $ \package -> sub $ do
     cd package
-    whenM (test_e $ toString currentWorkdir) $ cmd "rm" currentWorkdir
+    whenM (test_e $ toString stackWork) $ cmd "rm" stackWork
     cacheExists <- test_d $ toString (cacheDir currentBranch)
     masterExists <- test_d $ toString $ cacheDir (Branch "master")
     unless cacheExists $ do
@@ -51,7 +52,16 @@ relink = do
           cmd "cp" "-cpr" (cacheDir (Branch "master")) (cacheDir currentBranch)
         else do
           mkdir_p $ toString $ cacheDir currentBranch
-    cmd "ln" "-s" (cacheDir currentBranch) currentWorkdir
+    cmd "ln" "-s" (cacheDir currentBranch) stackWork
+
+clone :: Branch -> Sh ()
+clone fromBranch = do
+  currentBranch <- getCurrentBranch
+  cleanupBranch currentBranch
+
+  forAllPackages $ \package -> sub $ do
+    cd package
+    cmd "cp" "-cpr" (cacheDir fromBranch) (cacheDir currentBranch)
 
 initCache :: Sh ()
 initCache = do
@@ -86,8 +96,8 @@ sanitizeBranch (Branch branch) = T.strip $ T.replace "/" "_" branch
 cacheDir :: Branch -> Text
 cacheDir branch = "./.stack-work-cache/branch/" <> sanitizeBranch branch
 
-currentWorkdir :: Text
-currentWorkdir = "./.stack-work"
+stackWork :: Text
+stackWork = "./.stack-work"
 
 git = cmd "/usr/bin/git"
 
