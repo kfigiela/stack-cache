@@ -49,7 +49,7 @@ relink = do
       if masterExists
         then do
           putText "C"
-          cmd "cp" "-cpr" (cacheDir (Branch "master")) (cacheDir currentBranch)
+          copyCoW (cacheDir (Branch "master")) (cacheDir currentBranch)
         else do
           mkdir_p $ toString $ cacheDir currentBranch
     cmd "ln" "-s" (cacheDir currentBranch) stackWork
@@ -61,7 +61,7 @@ clone fromBranch = do
 
   forAllPackages $ \package -> sub $ do
     cd package
-    cmd "cp" "-cpr" (cacheDir fromBranch) (cacheDir currentBranch)
+    copyCoW (cacheDir fromBranch) (cacheDir currentBranch)
 
 initCache :: Sh ()
 initCache = do
@@ -76,8 +76,8 @@ initCache = do
   relink
   forAllPackages $ \package -> sub $ do
     cd package
-    cmd "tmutil" "addexclusion" ".stack-work-cache"
-    cmd "tmutil" "addexclusion" ".stack-work"
+    ignoreBackups ".stack-work-cache"
+    ignoreBackups ".stack-work"
 
 
 cleanupBranch :: Branch -> Sh ()
@@ -112,3 +112,15 @@ forAllPackages action = do
 
 getCurrentBranch :: Sh Branch
 getCurrentBranch = silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+
+ignoreBackups :: Text -> Sh ()
+-- macOS
+ignoreBackups = cmd "tmutil" "addexclusion"
+-- other
+-- ignoreBackups _ = pass
+
+copyCoW :: Text -> Text -> Sh ()
+-- macOS
+copyCoW = cmd "cp" "-cpr"
+-- linux
+-- copyCoW = cmd "cp" "--reflink=auto" "-pr"
