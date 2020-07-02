@@ -1,0 +1,112 @@
+#!/usr/bin/env stack
+-- stack --resolver lts-16.3 script --package yaml --package aeson --package universum --package shelly --package optparse-applicative --package text
+
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
+
+
+import Universum
+import Shelly
+import Options.Applicative hiding (command)
+import qualified Options.Applicative as O
+
+import qualified Data.Yaml as Y
+import qualified Data.Text as T
+default (Text)
+
+main :: IO ()
+main = do
+  StackYAML packages <- Y.decodeFileThrow "stack.yaml"
+  execParser (info (opts packages) idm) >>= shelly
+
+opts :: [FilePath] -> Parser (Sh ())
+opts packages = subparser
+  ( O.command "restore"     (info (pure $ restore packages) idm)
+ <> O.command "store"       (info (pure $ store packages) idm)
+ <> O.command "restoreFrom" (info ((restoreFrom packages .  Branch) <$> argument str idm) idm)
+ <> O.command "preinit"     (info (pure $ preinit packages) idm)
+ <> O.command "cleanup"     (info ((cleanupBranch packages . Branch) <$> argument str idm) idm)
+ <> O.command "build"       (info (stackBuild <$> some (argument str (metavar "ARGUMENTS..."))) idm)
+ <> O.command "switch"      (info ((gitSwitch packages . Branch) <$> argument str idm) idm)
+ )
+
+store :: [FilePath] -> Sh ()
+store packages = do
+  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
+  forM_ packages $ \package -> sub $ do
+    putTextLn $ toText package
+    cd package
+    mkdir_p "./.stack-work/git/branch"
+    cmd "tmutil" "addexclusion" ".stack-work"
+    cmd "rm" "-rf" (workdir currentBranch)
+    cmd "cp" "-cpr" currentWorkdir (workdir currentBranch)
+
+restore :: [FilePath] -> Sh ()
+restore packages = do
+  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
+  restoreFrom packages currentBranch
+
+restoreFrom :: [FilePath] -> Branch -> Sh ()
+restoreFrom packages fromBranch = do
+  forM_ packages $ \package -> sub $ do
+    putTextLn $ toText package
+    cd package
+    mkdir_p "./.stack-work/git/branch"
+    cmd "tmutil" "addexclusion" ".stack-work"
+    cmd "rm" "-rf" currentWorkdir
+    cmd "cp" "-cpr" (workdir fromBranch) currentWorkdir
+
+preinit :: [FilePath] -> Sh ()
+preinit packages = do
+  forM_ packages $ \package -> sub $ do
+    putTextLn $ toText package
+    cd package
+    mkdir_p "./.stack-work/git/branch"
+    cmd "tmutil" "addexclusion" ".stack-work"
+
+cleanupBranch :: [FilePath] -> Branch -> Sh ()
+cleanupBranch packages branch = do
+  forM_ packages $ \package -> sub $ do
+    putTextLn $ toText package
+    cd package
+    cmd "rm" "-rf" (workdir branch)
+
+stackBuild :: [Text] -> Sh ()
+stackBuild args = verbosely $ do
+  currentBranch <- silently $ Branch <$> cmd "/usr/bin/git" "rev-parse" "--abbrev-ref" "HEAD"
+  run_ "/usr/bin/env" $ ["stack", "build", "--work-dir", currentWorkdir] <> args
+
+
+gitSwitch :: [FilePath] -> Branch -> Sh ()
+gitSwitch packages newBranch = do
+  putTextLn "Storing current branch cache"
+  store packages
+  putTextLn $ "Switching branch to " <> unBranch newBranch
+  cmd "git" "switch" $ unBranch newBranch
+  isCached <- test_d $ toString $ workdir newBranch
+  if isCached
+    then do
+      putTextLn $ "Stack cache found..."
+      restore packages
+    else do
+      putTextLn $ "Stack cache not found, restoring from master..."
+      restoreFrom packages (Branch "master")
+
+
+
+data StackYAML = StackYAML { packages :: [FilePath] } deriving (Generic, Y.FromJSON)
+
+newtype Branch = Branch { unBranch :: Text }
+
+sanitizeBranch :: Branch -> Text
+sanitizeBranch (Branch branch) = T.strip $ T.replace "/" "_" branch
+
+workdir :: Branch -> Text
+workdir branch = "./.stack-work/git/branch/" <> sanitizeBranch branch
+
+currentWorkdir :: Text
+currentWorkdir = "./.stack-work/git/master"
