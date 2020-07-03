@@ -160,11 +160,11 @@ copyCoW from to = do
   when isLinux $ cmd "cp" "--reflink=always" "-pr" from to
 
 osType :: Text
-osType = toText $ unsafeDupablePerformIO $ getEnv "OSTYPE"
+osType = toText $ unsafeDupablePerformIO $ shelly $ silently $ cmd "uname"
 
 isMacOS, isLinux :: Bool
-isMacOS = T.isPrefixOf "darwin" osType
-isLinux = T.isPrefixOf "linux" osType
+isMacOS = T.isPrefixOf "Darwin" osType
+isLinux = T.isPrefixOf "Linux" osType
 
 -- Shelly API is a mess wrt. Text vs. String issue and FilePath aka String is not well supported by `cmd` in last version
 
