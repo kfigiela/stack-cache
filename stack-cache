@@ -10,30 +10,48 @@
 
 
 import Universum
-import Shelly hiding (whenM, unlessM)
+import Shelly hiding (whenM, unlessM, cd, rm_rf, test_e, test_d, mv, mkdir_p, lsT)
+import qualified Shelly as S
 import Options.Applicative hiding (command)
-import Options.Applicative.Help ((.$.))
+import Options.Applicative.Help ((.$.), Doc)
 import qualified Options.Applicative as O
 
 import qualified Data.Yaml as Y
 import qualified Data.Text as T
+import System.Environment (getEnv)
+import GHC.IO (unsafeDupablePerformIO)
 default (Text)
 
 main :: IO ()
 main =
-  execParser (info (opts <**> helper) ( fullDesc
+  execParser (info (opts <**> helper) (
+        fullDesc
      <> header "stack-cache – manage stack-work cache during SCM branch switches"
-     <> footerDoc (Just $ "Make sure to ignore stack-cache directories:" .$. "$ git config --global core.excludesfile ~/.gitignore" .$. "$ echo .stack-work-cache >> ~/.gitignore")
-     ))
+     <> footerDoc (Just doc)
+   ))
    >>= shelly
+
+doc :: Doc
+doc = "SETUP: "
+  .$. "1. Add stack-cache to $PATH"
+  .$. "2. Perform stack-cache init from the directory with stack.yaml"
+  .$. "3. Add post-checkout git hook to call `stack-cache relink` on branch change"
+  .$. ""
+  .$. "4. Make sure to ignore stack-cache directories:"
+  .$. "$ git config --global core.excludesfile ~/.gitignore"
+  .$. "$ echo .stack-work-cache >> ~/.gitignore"
+  .$. "$ echo .stack-work >> ~/.gitignore"
+  .$. ""
+  .$. "5. Periodically run stack-cache clean-all to free some disk space"
 
 opts :: Parser (Sh ())
 opts = subparser
- (  O.command "init"                (info (pure initCache) (progDesc "Create initial directory structure"))
- <> O.command "relink"              (info (pure relink) (progDesc "Relink stack-work from current branch cache"))
- <> O.command "clone"               (info ((clone . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Clone stack-work from other branch cache"))
- <> O.command "clean-branch"        (info ((cleanupBranch . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Delete sepecified branch cache"))
- <> O.command "clean"               (info (pure $ getCurrentBranch >>= cleanupBranch) (progDesc "Remove current stack-work, use relink to copy from master"))
+ (  O.command "init"                (info (pure initCache)                                               (progDesc "Create initial directory structure"))
+ <> O.command "relink"              (info (pure relink)                                                  (progDesc "Relink stack-work from current branch cache"))
+ <> O.command "clone"               (info ((clone . Branch) <$> argument str (metavar "BRANCH"))         (progDesc "Clone stack-work from other branch cache"))
+ <> O.command "clean-branch"        (info ((cleanBranch . Branch) <$> argument str (metavar "BRANCH")) (progDesc "Delete sepecified branch cache"))
+ <> O.command "clean-current"       (info (pure $ getCurrentBranch >>= cleanBranch)                    (progDesc "Remove current stack-work, use relink to copy from master"))
+ <> O.command "clean-all"           (info (pure $ cleanAll)                                              (progDesc "Deletes cache of all branches except current branch and master"))
  )
 
 
@@ -42,22 +60,22 @@ relink = do
   currentBranch <- getCurrentBranch
   forAllPackages $ \package -> sub $ do
     cd package
-    whenM (test_e $ toString stackWork) $ cmd "rm" stackWork
-    cacheExists <- test_d $ toString (cacheDir currentBranch)
-    masterExists <- test_d $ toString $ cacheDir (Branch "master")
+    whenM (test_e stackWork) $ cmd "rm" stackWork
+    cacheExists <- test_d (cacheDir currentBranch)
+    masterExists <- test_d $ cacheDir master
     unless cacheExists $ do
       if masterExists
         then do
           putText "C"
-          copyCoW (cacheDir (Branch "master")) (cacheDir currentBranch)
+          copyCoW (cacheDir master) (cacheDir currentBranch)
         else do
-          mkdir_p $ toString $ cacheDir currentBranch
-    cmd "ln" "-s" (cacheDir currentBranch) stackWork
+          mkdir_p $ cacheDir currentBranch
+    ln_s (cacheDir currentBranch) stackWork
 
 clone :: Branch -> Sh ()
 clone fromBranch = do
   currentBranch <- getCurrentBranch
-  cleanupBranch currentBranch
+  cleanBranch currentBranch
 
   forAllPackages $ \package -> sub $ do
     cd package
@@ -68,59 +86,92 @@ initCache = do
   currentBranch <- getCurrentBranch
   forAllPackages $ \package -> sub $ do
     cd package
-    mkdir_p "./.stack-work-cache/branch"
-    whenM (test_d $ ".stack-work") $
-      unlessM (test_d $ toString $ cacheDir currentBranch) $
-        cmd "mv" ".stack-work" $ cacheDir currentBranch
-    cmd "rm" "-rf" ".stack-work"
+    mkdir_p cacheRoot
+    whenM (test_d stackWork) $
+      unlessM (test_d $ cacheDir currentBranch) $
+        mv stackWork $ cacheDir currentBranch
+    rm_rf stackWork
   relink
   forAllPackages $ \package -> sub $ do
     cd package
     ignoreBackups ".stack-work-cache"
-    ignoreBackups ".stack-work"
+    ignoreBackups stackWork
 
 
-cleanupBranch :: Branch -> Sh ()
-cleanupBranch branch = do
+cleanBranch :: Branch -> Sh ()
+cleanBranch branch = do
   forAllPackages $ \package -> sub $ do
     cd package
-    cmd "rm" "-rf" (cacheDir branch)
+    rm_rf (cacheDir branch)
 
-data StackYAML = StackYAML { packages :: [FilePath] } deriving (Generic, Y.FromJSON)
+cleanAll :: Sh ()
+cleanAll = do
+  currentBranch <- getCurrentBranch
+  cleanAllExcept [currentBranch, master]
+
+cleanAllExcept :: [Branch] -> Sh ()
+cleanAllExcept branches = do
+  let ignoreDirs = cacheDir <$> branches
+  forAllPackages $ \package -> sub $ do
+    cd package
+    allDirs <- lsT cacheRoot
+    let dirsToRemove = filter (\dir -> not (dir `elem` ignoreDirs)) allDirs
+    forM_ dirsToRemove $ \dir -> do
+      rm_rf dir
 
 newtype Branch = Branch { unBranch :: Text }
+master = Branch "master"
 
 sanitizeBranch :: Branch -> Text
 sanitizeBranch (Branch branch) = T.strip $ T.replace "/" "_" branch
 
 cacheDir :: Branch -> Text
-cacheDir branch = "./.stack-work-cache/branch/" <> sanitizeBranch branch
+cacheDir branch = cacheRoot <> "/" <> sanitizeBranch branch
+
+cacheRoot :: Text
+cacheRoot =  "./.stack-work-cache/branch"
 
 stackWork :: Text
 stackWork = "./.stack-work"
 
-git = cmd "/usr/bin/git"
+data StackYAML = StackYAML { packages :: [Text] } deriving (Generic, Y.FromJSON)
 
-allPackages :: MonadIO m => m [FilePath]
+allPackages :: MonadIO m => m [Text]
 allPackages = packages <$> liftIO (Y.decodeFileThrow "stack.yaml")
 
-forAllPackages :: MonadIO m => (FilePath -> m ()) -> m ()
+forAllPackages :: MonadIO m => (Text -> m ()) -> m ()
 forAllPackages action = do
   packages <- allPackages
   forM_ packages $ \package -> action package >> putText "."
   putText "\n"
 
+git = cmd "/usr/bin/env" "git"
+ln_s = cmd "ln" "-s" :: Text -> Text -> Sh ()
+
 getCurrentBranch :: Sh Branch
 getCurrentBranch = silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
 
 ignoreBackups :: Text -> Sh ()
--- macOS
-ignoreBackups = cmd "tmutil" "addexclusion"
--- other
--- ignoreBackups _ = pass
+ignoreBackups = when isMacOS . cmd "tmutil" "addexclusion"
 
 copyCoW :: Text -> Text -> Sh ()
--- macOS
-copyCoW = cmd "cp" "-cpr"
--- linux
--- copyCoW = cmd "cp" "--reflink=auto" "-pr"
+copyCoW from to = do
+  when isMacOS $ cmd "cp" "-cpr" from to
+  when isLinux $ cmd "cp" "--reflink=always" "-pr" from to
+
+osType :: Text
+osType = toText $ unsafeDupablePerformIO $ getEnv "OSTYPE"
+
+isMacOS, isLinux :: Bool
+isMacOS = T.isPrefixOf "darwin" osType
+isLinux = T.isPrefixOf "linux" osType
+
+-- Shelly API is a mess wrt. Text vs. String issue and FilePath aka String is not well supported by `cmd` in last version
+
+cd = S.cd . toString
+lsT = S.lsT . toString
+rm_rf = S.rm_rf . toString
+mkdir_p = S.mkdir_p . toString
+mv f t = S.mv (toString f) (toString t)
+test_e = S.test_e . toString
+test_d = S.test_d . toString

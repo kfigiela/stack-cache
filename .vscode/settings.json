@@ -1,0 +1,16 @@
+{
+    "spellright.language": [
+        "pl",
+        "en"
+    ],
+    "spellright.documentTypes": [
+        "markdown",
+        "latex",
+        "dokuwiki"
+    ],
+    "spellright.parserByClass": {
+        "dokuwiki": {
+            "parser": "plain"
+        }
+    }
+}
