@@ -1,0 +1,43 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.33.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 2ff8cba451daea3d52a98453359847a09e720e1650efcf614adaba9cfdb60ce4
+
+name:           stack-cache
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/re-utils#readme>
+homepage:       https://github.com/githubuser/re-utils#readme
+bug-reports:    https://github.com/githubuser/re-utils/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2018 Author name here
+license:        BSD3
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/re-utils
+
+executable stack-cache
+  main-is: StackCache.hs
+  other-modules:
+      Paths_stack_cache
+  hs-source-dirs:
+      ./.
+  default-extensions: ExplicitNamespaces LambdaCase MultiWayIf NamedFieldPuns NumDecimals OverloadedLabels PackageImports TupleSections TypeOperators ViewPatterns ConstraintKinds DataKinds DefaultSignatures DeriveFunctor DeriveGeneric FlexibleContexts FlexibleInstances GADTs MultiParamTypeClasses OverloadedStrings PatternSynonyms PolyKinds RankNTypes ScopedTypeVariables TypeApplications TypeFamilies
+  ghc-options: -threaded -rtsopts -with-rtsopts=-T
+  build-depends:
+      aeson
+    , base >=4.7 && <5
+    , optparse-applicative
+    , shelly
+    , text
+    , universum
+    , yaml
+  default-language: Haskell2010

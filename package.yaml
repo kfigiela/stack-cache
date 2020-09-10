@@ -1,0 +1,68 @@
+name:                stack-cache
+version:             0.1.0.0
+github:              "githubuser/re-utils"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2018 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/re-utils#readme>
+
+default-extensions:
+# Syntax
+- ExplicitNamespaces
+- LambdaCase
+- MultiWayIf
+- NamedFieldPuns
+- NumDecimals
+- OverloadedLabels
+- PackageImports
+- TupleSections
+- TypeOperators
+- ViewPatterns
+
+# Serious stuff
+- ConstraintKinds
+- DataKinds
+- DefaultSignatures
+- DeriveFunctor
+- DeriveGeneric
+- FlexibleContexts
+- FlexibleInstances
+- GADTs
+- MultiParamTypeClasses
+- OverloadedStrings
+- PatternSynonyms
+- PolyKinds
+- RankNTypes
+- ScopedTypeVariables
+- TypeApplications
+- TypeFamilies
+
+dependencies:
+- base >= 4.7 && < 5
+- yaml
+- aeson
+- universum
+- shelly
+- optparse-applicative
+- text
+
+executable:
+  source-dirs: .
+  main: StackCache.hs
+  ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-T
