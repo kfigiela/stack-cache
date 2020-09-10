@@ -30,4 +30,4 @@ jobs:
         mkdir dist
         stack --no-terminal build --test --no-run-tests
     - name: Test
-      run: stack --no-terminalc build --test
+      run: stack --no-terminal build --test
