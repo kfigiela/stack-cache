@@ -1,0 +1,23 @@
+name: CI
+
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-haskell@v1
+      with:
+        ghc-version: '8.6.5'
+        enable-stack: true
+        stack-version: 'latest'
+   
+    - name: Build dependencies
+      run: |
+        stack --no-terminal --install-ghc build --test --only-dependencies
+    - name: Build
+      run: |
+        mkdir dist
+        stack --no-terminal build --test --no-run-tests
+    - name: Test
+      run: stack --no-terminalc build --test
