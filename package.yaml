@@ -58,6 +58,7 @@ dependencies:
 - shelly
 - optparse-applicative
 - text
+- unix
 
 executable:
   source-dirs: .

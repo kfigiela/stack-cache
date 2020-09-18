@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 2ff8cba451daea3d52a98453359847a09e720e1650efcf614adaba9cfdb60ce4
+-- hash: fad4805512558cfedfad8391cfc552d6f69f88ec321c05a7a33dd1c53f368b2e
 
 name:           stack-cache
 version:        0.1.0.0
@@ -39,5 +39,6 @@ executable stack-cache
     , shelly
     , text
     , universum
+    , unix
     , yaml
   default-language: Haskell2010

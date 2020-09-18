@@ -1,3 +1,5 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DerivingStrategies #-}
 #!/usr/bin/env stack
 -- stack --resolver lts-16.3 script --package yaml --package aeson --package universum --package shelly --package optparse-applicative --package text
 
@@ -21,6 +23,9 @@ import qualified Data.Yaml as Y
 import qualified Data.Text as T
 import System.Environment (getEnv)
 import GHC.IO (unsafeDupablePerformIO)
+import qualified System.Posix.Files as Posix
+import qualified System.Posix.Directory as Posix
+import qualified GHC.IO.Exception as IOE
 default (Text)
 
 main :: IO ()
@@ -52,75 +57,74 @@ opts = subparser
  <> O.command "check"               (info (pure check)                                                   (progDesc "Check if stack-cache is properly inited (do before switching branches)"))
  <> O.command "clone"               (info ((clone . Branch) <$> argument str (metavar "BRANCH"))         (progDesc "Clone stack-work from other branch cache"))
  <> O.command "clean-branch"        (info ((cleanBranch . Branch) <$> argument str (metavar "BRANCH"))   (progDesc "Delete sepecified branch cache"))
- <> O.command "clean-current"       (info (pure $ getCurrentBranch >>= cleanBranch)                      (progDesc "Remove current stack-work, use relink to copy from master"))
+ <> O.command "clean-current"       (info (pure $ withCurrentBranch cleanBranch)                      (progDesc "Remove current stack-work, use relink to copy from master"))
  <> O.command "clean-all"           (info (pure $ cleanAll)                                              (progDesc "Deletes cache of all branches except current branch and master"))
  )
 
 check :: Sh ()
 check = do
-  currentBranch <- getCurrentBranch
-  results <- forAllPackages $ \package -> sub $ do
-    cd package
-    exists <- test_e stackWork
-    isSymlink <- test_s stackWork
-    case (exists, isSymlink) of
-      (True, False) -> pure True
-      _ -> pure False
+  withCurrentBranch $ \currentBranch -> do
+    results <- forAllPackages $ \package -> sub $ do
+      cd package
+      exists <- test_e stackWork
+      isSymlink <- test_s stackWork
+      case (exists, isSymlink) of
+        (True, False) -> pure True
+        _ -> pure False
 
-  let failed = any snd results
-  unless failed $ putTextLn "Symlinks OK"
-  when failed $ do
-    putTextLn ".stack-work for some packages is not a symlink, aborting relink – please do stack-cache init, affected packages:"
-    forM_ (fmap fst . filter snd $ results) (putTextLn . (" - "<>))
-    errorExit "stack-cache is not properly initialized"
+    let failed = any snd results
+    unless failed $ putTextLn "Symlinks OK"
+    when failed $ do
+      putTextLn ".stack-work for some packages is not a symlink, aborting relink – please do stack-cache init, affected packages:"
+      forM_ (fmap fst . filter snd $ results) (putTextLn . (" - "<>))
+      errorExit "stack-cache is not properly initialized"
 
 relink :: Sh ()
 relink = do
-  currentBranch <- getCurrentBranch
-  forAllPackages_ $ \package -> sub $ do
-    cd package
-    exists <- test_e stackWork
-    isSymlink <- test_s stackWork
-    case (exists, isSymlink) of
-      (False, _) -> pass
-      (True, True) -> cmd "rm" stackWork
-      (True, False) -> errorExit $ ".stack-work for " <> package <> " is not a symlink"
+  withCurrentBranch $ \currentBranch -> do
+    forAllPackages_ $ \package -> sub $ do
+      cd package
+      exists <- test_e stackWork
+      isSymlink <- test_s stackWork
+      case (exists, isSymlink) of
+        (False, _) -> pass
+        (True, True) -> cmd "rm" stackWork
+        (True, False) -> errorExit $ ".stack-work for " <> package <> " is not a symlink"
 
-    cacheExists <- test_d_not_l (cacheDir currentBranch)
-    masterExists <- test_d_not_l $ cacheDir master
-    unless cacheExists $ do
-      if masterExists
-        then do
-          putText "C"
-          copyCoW (cacheDir master) (cacheDir currentBranch)
-        else do
-          mkdir_p $ cacheDir currentBranch
-    ln_s (cacheDir currentBranch) stackWork
+      cacheExists <- test_d_not_l (cacheDir currentBranch)
+      masterExists <- test_d_not_l $ cacheDir master
+      unless cacheExists $ do
+        if masterExists
+          then do
+            putText "C"
+            copyCoW (cacheDir master) (cacheDir currentBranch)
+          else do
+            mkdir_p $ cacheDir currentBranch
+      ln_s (cacheDir currentBranch) stackWork
 
 clone :: Branch -> Sh ()
 clone fromBranch = do
-  currentBranch <- getCurrentBranch
-  cleanBranch currentBranch
-
-  forAllPackages_ $ \package -> sub $ do
-    cd package
-    copyCoW (cacheDir fromBranch) (cacheDir currentBranch)
+  withCurrentBranch $ \currentBranch -> do
+    cleanBranch currentBranch
+    forAllPackages_ $ \package -> sub $ do
+      cd package
+      copyCoW (cacheDir fromBranch) (cacheDir currentBranch)
 
 initCache :: Sh ()
 initCache = do
-  currentBranch <- getCurrentBranch
-  forAllPackages_ $ \package -> sub $ do
-    cd package
-    mkdir_p cacheRoot
-    whenM (test_d_not_l stackWork) $
-      unlessM (test_d_not_l $ cacheDir currentBranch) $
-        mv stackWork $ cacheDir currentBranch
-    rm_rf stackWork
-  relink
-  forAllPackages_ $ \package -> sub $ do
-    cd package
-    ignoreBackups ".stack-work-cache"
-    ignoreBackups stackWork
+  withCurrentBranch $ \currentBranch -> do
+    forAllPackages_ $ \package -> sub $ do
+      cd package
+      mkdir_p cacheRoot
+      whenM (test_d_not_l stackWork) $
+        unlessM (test_d_not_l $ cacheDir currentBranch) $
+          mv stackWork $ cacheDir currentBranch
+      rm_rf stackWork
+    relink
+    forAllPackages_ $ \package -> sub $ do
+      cd package
+      ignoreBackups ".stack-work-cache"
+      ignoreBackups stackWork
 
 
 cleanBranch :: Branch -> Sh ()
@@ -132,7 +136,7 @@ cleanBranch branch = do
 cleanAll :: Sh ()
 cleanAll = do
   currentBranch <- getCurrentBranch
-  cleanAllExcept [currentBranch, master]
+  cleanAllExcept $ catMaybes [currentBranch, Just master]
 
 cleanAllExcept :: [Branch] -> Sh ()
 cleanAllExcept branches = do
@@ -145,6 +149,7 @@ cleanAllExcept branches = do
       rm_rf dir
 
 newtype Branch = Branch { unBranch :: Text }
+  deriving newtype (Show, Eq, IsString)
 master = Branch "master"
 
 sanitizeBranch :: Branch -> Text
@@ -180,8 +185,19 @@ forAllPackages action = do
 git = cmd "/usr/bin/env" "git"
 ln_s = cmd "ln" "-s" :: Text -> Text -> Sh ()
 
-getCurrentBranch :: Sh Branch
-getCurrentBranch = silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD"
+getCurrentBranch :: Sh (Maybe Branch)
+getCurrentBranch = do
+  refName <- silently $ Branch <$> git "rev-parse" "--abbrev-ref" "HEAD" --  git "symbolic-ref" "HEAD"
+  pure $ if refName /= "HEAD"
+    then Just refName
+    else Nothing
+
+withCurrentBranch :: (Branch -> Sh ()) -> Sh ()
+withCurrentBranch action = do
+  branchNameMb <- getCurrentBranch
+  case branchNameMb of
+    Just branchName -> action branchName
+    Nothing -> putTextLn "Not on branch, doing nothing."
 
 ignoreBackups :: Text -> Sh ()
 ignoreBackups = when isMacOS . cmd "tmutil" "addexclusion"
@@ -205,14 +221,21 @@ lsT = S.lsT . toString
 rm_rf = S.rm_rf . toString
 mkdir_p = S.mkdir_p . toString
 mv f t = S.mv (toString f) (toString t)
-test_e = S.test_e . toString
-test_d = S.test_d . toString
+test_e = fmap isJust . getFileStatus
+test_d = fmap (maybe False Posix.isDirectory) . getFileStatus
+test_s = fmap (maybe False Posix.isSymbolicLink) . getFileStatus
 
-test_s path = ifM (test_e path) (S.test_s (toString path)) (pure False)
+getFileStatus :: Text -> Sh (Maybe Posix.FileStatus)
+getFileStatus = fmap toText . absPath . toString >=> \path -> liftIO $ do
+  result <- try $ Posix.getSymbolicLinkStatus (toString path)
+  case result of
+    Left err | IOE.ioe_type err == IOE.NoSuchThing -> pure Nothing
+    Left err -> IOE.ioError err
+    Right status -> pure $ Just status
 
 test_d_not_l :: Text -> Sh Bool
 test_d_not_l path = do
-  isD <- test_d path
-  if isD
-    then not <$> test_s path
-    else pure False
+  status <- getFileStatus path
+  pure $ case status of
+    Just status -> Posix.isDirectory status && not (Posix.isSymbolicLink status)
+    Nothing -> False
